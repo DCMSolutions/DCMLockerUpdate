@@ -19,6 +19,6 @@ else
 fi
 
 sudo git clone https://github.com/DCMSolutions/DCMLockerLast
-
+sudo mv  DCMLockerLast DCMLocker
 sudo systemctl restart dcmlocker
 sudo reboot
