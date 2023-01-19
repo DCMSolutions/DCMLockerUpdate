@@ -18,7 +18,7 @@ else
    echo "El directorio ${DIRECTORIO} no existe"
 fi
 
-sudo git clone https://github.com/Ansel-dal/DCMLocker
+sudo git clone https://github.com/DCMSolutions/DCMLockerLast
 
 sudo systemctl restart dcmlocker
 sudo reboot
