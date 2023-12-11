@@ -14,3 +14,4 @@ echo "[Desktop Entry]
 Name=KioskMode #name
 Exec=chromium-browser --start-fullscreen --kiosk --app=http://localhost:5022/ --disable-pinch
 " > /etc/xdg/autostart/display.desktop
+sudo reboot
