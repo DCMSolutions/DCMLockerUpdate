@@ -53,7 +53,7 @@ sudo chmod ugo+rwx /etc/xdg/autostart/display.desktop
 #modifico archivo y agrego instrucciones
 echo "[Desktop Entry]
 Name=KioskMode #name
-Exec=chromium-browser --start-fullscreen --force-device-scale-factor=0.7 --kiosk --app=http://localhost:5022/
+Exec=chromium-browser --start-fullscreen --kiosk --force-device-scale-factor=1 --app=http://localhost:5022/ --disable-pinch
 " > /etc/xdg/autostart/display.desktop
 
 sudo reboot
