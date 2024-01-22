@@ -18,7 +18,7 @@ else
    echo "El directorio ${DIRECTORIO} no existe"
 fi
 
-sudo git clone https://github.com/DCMSolutions/DCMLockerLast
-sudo mv  DCMLockerLast DCMLocker
+sudo git clone https://github.com/DCMSolutions/DCMLockerLast /home/pi/DCMLocker
+
 sudo systemctl restart dcmlocker
 sudo reboot
