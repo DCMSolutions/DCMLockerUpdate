@@ -2,23 +2,8 @@
 
 
 
-#Se chequea si algunas carpetas existen, y en ese caso, las borro.
-
-if [ -d "/home/pi/DCMLocker" ]
-then
-   sudo rm -r /home/pi/DCMLocker
-else
-   echo "El directorio ${DIRECTORIO} no existe"
-fi
-
-if [ -d "/home/pi/'DCMLocker\base'" ]
-then
-   sudo rm -r /home/pi/'DCMLocker\base'
-else
-   echo "El directorio ${DIRECTORIO} no existe"
-fi
-
+sudo rm -r /home/pi/DCMLocker
+sudo rm -r /home/pi/'DCMLocker\base'
 sudo git clone https://github.com/DCMSolutions/DCMLockerLast /home/pi/DCMLocker
-
 sudo systemctl restart dcmlocker
 sudo reboot
