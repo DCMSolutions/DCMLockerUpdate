@@ -8,4 +8,4 @@ sudo git clone https://github.com/DCMSolutions/DCMLockerLast /home/pi/DCMLocker
 sudo systemctl restart dcmlocker
 sudo reboot
 
-sudo chromium-browser http://localhost:5022/
+sudo chromium-browser http://localhost:5020/
