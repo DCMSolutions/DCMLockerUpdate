@@ -2,6 +2,7 @@ sudo apt-get update
 sudo apt install nginx -y
 sudo service nginx start
 sudo apt install rpi-eeprom rpi-eeprom-images -y
+sudo apt-get install -y chromium-browser-l10n
 
 #configuraciones de red
 echo -e "
