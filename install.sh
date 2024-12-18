@@ -46,15 +46,6 @@ sudo systemctl enable dcmlocker.service
 #inico servicio
 sudo systemctl start dcmlocker.service
 
-############ inicio en chromium ############
-#creo archivo que da el arranque
-sudo touch /etc/xdg/autostart/display.desktop
-#doy permisos para modificar desde el script
-sudo chmod ugo+rwx /etc/xdg/autostart/display.desktop
-#modifico archivo y agrego instrucciones
-echo "[Desktop Entry]
-Name=KioskMode #name
-Exec=chromium-browser --start-fullscreen --kiosk --force-device-scale-factor=1 --app=http://localhost:5022/ --disable-pinch
-" > /etc/xdg/autostart/display.desktop
+xhost +SI:localuser:root
 
 sudo reboot
