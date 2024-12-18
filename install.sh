@@ -16,10 +16,9 @@ metric 200
 " >> /etc/dhcpcd.conf
 
 #Para la apertura del navegador
-xhost +SI:localuser:root
+
 
 #Instalar repositorio de la aplicación
-
 sudo git clone https://github.com/DCMSolutions/DCMLockerLast /home/pi/DCMLocker
 
 #instalar net 5
