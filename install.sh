@@ -31,12 +31,12 @@ sudo touch /etc/systemd/system/xhost-setup.service
 sudo chmod ugo+rwx /etc/systemd/system/xhost-setup.service
 echo -e "[Unit]
 Description=Allow root access to X server
-After=display-manager.service
+After=graphical.target
+Requires=graphical.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/xhost +SI:localuser:root
-Environment=DISPLAY=:0
+ExecStart=/bin/bash -c "sleep 10 && DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority /usr/bin/xhost +SI:localuser:root"
 User=pi
 
 [Install]
@@ -55,18 +55,20 @@ sudo touch /etc/systemd/system/dcmlocker.service
 #doy permisos para modificar desde el script
 sudo chmod ugo+rwx /etc/systemd/system/dcmlocker.service
 echo -e "[Unit]
-Description=dcmlocker 
+Description=dcmlocker
 After=xhost-setup.service
 Requires=xhost-setup.service
+
 [Service]
- WorkingDirectory=/home/pi/DCMLocker
- ExecStart=/opt/dotnet/dotnet /home/pi/DCMLocker/DCMLocker.Server.dll
- Restart=always   
- SyslogIdentifier=dotnet-dcmlocker    
- User=root
- Environment=ASPNETCORE_ENVIRONMENT=Production 
+WorkingDirectory=/home/pi/DCMLocker
+ExecStart=/opt/dotnet/dotnet /home/pi/DCMLocker/DCMLocker.Server.dll
+Restart=always
+SyslogIdentifier=dotnet-dcmlocker
+User=root
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
 [Install]
- WantedBy=multi-user.target
+WantedBy=multi-user.target
 " > /etc/systemd/system/dcmlocker.service
 
 #creo servicio
