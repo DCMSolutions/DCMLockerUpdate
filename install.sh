@@ -24,6 +24,31 @@ sudo git clone https://github.com/DCMSolutions/DCMLockerLast /home/pi/DCMLocker
 #instalar net 5
 sudo wget -O - https://raw.githubusercontent.com/pjgpetecodes/dotnet5pi/master/install.sh | sudo bash
 
+############ creo xhost-setup.service  ############
+#creo archivo que da el arranque
+sudo touch /etc/systemd/system/xhost-setup.service
+#doy permisos para modificar desde el script
+sudo chmod ugo+rwx /etc/systemd/system/xhost-setup.service
+echo -e "[Unit]
+Description=Allow root access to X server
+After=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/xhost +SI:localuser:root
+Environment=DISPLAY=:0
+User=pi
+
+[Install]
+WantedBy=graphical.target
+" > /etc/systemd/system/xhost-setup.service
+
+#creo servicio
+sudo systemctl enable xhost-setup.service
+
+#inico servicio
+sudo systemctl start xhost-setup.service
+
 ############ creo dcmlocker.service  ############
 #creo archivo que da el arranque
 sudo touch /etc/systemd/system/dcmlocker.service
