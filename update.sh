@@ -1,5 +1,31 @@
 ### BIENVENIDO AL DCM UPDATER ###
 
+############ creo xhost-setup.service  ############
+#creo archivo que da el arranque
+sudo touch /etc/systemd/system/xhost-setup.service
+#doy permisos para modificar desde el script
+sudo chmod ugo+rwx /etc/systemd/system/xhost-setup.service
+echo -e "[Unit]
+Description=Allow root access to X server
+After=graphical.target
+Requires=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c "sleep 10 && DISPLAY=:0 XAUTHORITY=/home/pi/.Xauthority /usr/bin/xhost +SI:localuser:root"
+User=pi
+
+[Install]
+WantedBy=graphical.target
+" > /etc/systemd/system/xhost-setup.service
+
+#creo servicio
+sudo systemctl enable xhost-setup.service
+
+#inico servicio
+sudo systemctl start xhost-setup.service
+
+
 if [ ! -f /home/pi/LoackerConfig.config ]; then
     sudo cp /home/pi/'DCMLocker\Base'/LoackerConfig.config /home/pi/LoackerConfig.config
 fi
