@@ -25,6 +25,33 @@ sudo systemctl enable xhost-setup.service
 #inico servicio
 sudo systemctl start xhost-setup.service
 
+############ creo dcmlocker.service  ############
+#creo archivo que da el arranque
+sudo touch /etc/systemd/system/dcmlocker.service
+#doy permisos para modificar desde el script
+sudo chmod ugo+rwx /etc/systemd/system/dcmlocker.service
+echo -e "[Unit]
+Description=dcmlocker
+After=xhost-setup.service
+Requires=xhost-setup.service
+
+[Service]
+WorkingDirectory=/home/pi/DCMLocker
+ExecStart=/opt/dotnet/dotnet /home/pi/DCMLocker/DCMLocker.Server.dll
+Restart=always
+SyslogIdentifier=dotnet-dcmlocker
+User=root
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
+[Install]
+WantedBy=multi-user.target
+" > /etc/systemd/system/dcmlocker.service
+
+#creo servicio
+sudo systemctl enable dcmlocker.service
+
+#inico servicio
+sudo systemctl start dcmlocker.service
 
 if [ ! -f /home/pi/LoackerConfig.config ]; then
     sudo cp /home/pi/'DCMLocker\Base'/LoackerConfig.config /home/pi/LoackerConfig.config
