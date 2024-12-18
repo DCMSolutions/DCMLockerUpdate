@@ -1,5 +1,7 @@
 ### BIENVENIDO AL DCM UPDATER ###
 
+xhost +SI:localuser:root
+
 if [ ! -f /home/pi/LoackerConfig.config ]; then
     sudo cp /home/pi/'DCMLocker\Base'/LoackerConfig.config /home/pi/LoackerConfig.config
 fi
