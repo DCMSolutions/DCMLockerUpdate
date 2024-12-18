@@ -15,6 +15,9 @@ interface wlan0
 metric 200
 " >> /etc/dhcpcd.conf
 
+#Para la apertura del navegador
+xhost +SI:localuser:root
+
 #Instalar repositorio de la aplicación
 
 sudo git clone https://github.com/DCMSolutions/DCMLockerLast /home/pi/DCMLocker
@@ -45,7 +48,5 @@ sudo systemctl enable dcmlocker.service
 
 #inico servicio
 sudo systemctl start dcmlocker.service
-
-xhost +SI:localuser:root
 
 sudo reboot
