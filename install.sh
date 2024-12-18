@@ -56,6 +56,8 @@ sudo touch /etc/systemd/system/dcmlocker.service
 sudo chmod ugo+rwx /etc/systemd/system/dcmlocker.service
 echo -e "[Unit]
 Description=dcmlocker 
+After=xhost-setup.service
+Requires=xhost-setup.service
 [Service]
  WorkingDirectory=/home/pi/DCMLocker
  ExecStart=/opt/dotnet/dotnet /home/pi/DCMLocker/DCMLocker.Server.dll
