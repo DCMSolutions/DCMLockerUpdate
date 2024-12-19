@@ -39,12 +39,6 @@ Type=Application
 X-GNOME-Autostart-enabled=true
 " > /etc/xdg/autostart/display.desktop
 
-#creo servicio
-sudo systemctl enable display.service
-
-#inico servicio
-sudo systemctl start display.service
-
 ############ creo dcmlocker.service  ############
 #creo archivo que da el arranque
 sudo touch /etc/systemd/system/dcmlocker.service
