@@ -34,7 +34,7 @@ sudo chmod ugo+rwx /etc/xdg/autostart/display.desktop
 # modifico archivo y agrego instrucciones
 echo "[Desktop Entry]
 Name=KioskMode #name
-Exec=/bin/bash -c 'while ! systemctl is-active --quiet dcmlocker.service; do sleep 1; done; chromium-browser --start-fullscreen --kiosk --force-device-scale-factor=1 --app=http://localhost:5022/ --disable-pinch'
+Exec=/bin/bash -c 'chromium-browser --start-fullscreen --kiosk --force-device-scale-factor=1 --app=http://localhost:5022/ --disable-pinch'
 Type=Application
 X-GNOME-Autostart-enabled=true
 " > /etc/xdg/autostart/display.desktop
