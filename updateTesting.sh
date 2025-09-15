@@ -1,13 +1,17 @@
+set +e #esto hace que los errores no corten la compilacion
+
 #temporal para pantalla blanca
 
 # modifico archivo y agrego instrucciones
-echo "[Desktop Entry]
+sudo tee /etc/xdg/autostart/display.desktop >/dev/null <<'EOF'
+[Desktop Entry]
 Name=KioskMode
 Exec=/home/pi/kiosk-launcher.sh
 Type=Application
 X-GNOME-Autostart-enabled=true
 X-GNOME-Autostart-Delay=5
-" > /etc/xdg/autostart/display.desktop
+EOF
+
 
 # creo el archivo ejecutable que abre el chromium
 cat << 'EOF' > /home/pi/kiosk-launcher.sh
@@ -17,6 +21,7 @@ EOF
 
 # doy permisos de ejecucion
 chmod +x /home/pi/kiosk-launcher.sh
+sudo chmod 644 /etc/xdg/autostart/display.desktop
 
 # creo la pagina falsa que redirije
 cat << 'EOF' > /home/pi/reloader.html
