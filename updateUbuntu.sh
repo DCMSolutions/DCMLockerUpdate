@@ -1,5 +1,5 @@
 sudo rm -r /home/DCMLocker.bak
-sudo mv /home/DCMLocker /home/DCMLocker.bak
-sudo rm -r /home/'DCMLocker\Base'
-sudo git clone https://github.com/DCMSolutions/DCMLockerLastUbuntu /home/DCMLocker
+sudo mv /home/DCMLockerLastUbuntu /home/DCMLocker.bak
+sudo rm -r /home/'DCMLockerLastUbuntu\Base'
+sudo git clone https://github.com/DCMSolutions/DCMLockerLastUbuntu /home/DCMLockerLastUbuntu
 sudo reboot
