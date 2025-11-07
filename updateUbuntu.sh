@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
+set -euo pipefail #esto es para que cualquier error te saque del comando, no se si lo quiero o no, para pensar 
 
-cd /home || exit 1
+TARGET_DIR="/home/DCMLockerLastUbuntu"
 
-rm -rf /home/DCMLocker.bak
-[ -d /home/DCMLockerLastUbuntu ] && mv /home/DCMLockerLastUbuntu /home/DCMLocker.bak || true
+git -C "$TARGET_DIR" fetch --depth=1 origin
+git -C "$TARGET_DIR" reset --hard origin/HEAD
 
-rm -rf /home/'DCMLockerLastUbuntu\Base' || true
+mkdir -p "$TARGET_DIR/eventos"
 
-git clone --depth 1 https://github.com/DCMSolutions/DCMLockerLastUbuntu /home/DCMLockerLastUbuntu
+if [ ! -f "$TARGET_DIR/configjson.json" ] && [ -f "$TARGET_DIR/configjson.json.sample" ]; then
+  cp "$TARGET_DIR/configjson.json.sample" "$TARGET_DIR/configjson.json"
+fi
 
 nohup bash -c 'sleep 2; reboot' >/dev/null 2>&1 &
