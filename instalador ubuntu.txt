@@ -1,0 +1,290 @@
+# -------------------------------------------------------------------
+# 1) Red — listar conexiones existentes para referencia
+# -------------------------------------------------------------------
+nmcli -t -f NAME,DEVICE connection show || true
+
+# -------------------------------------------------------------------
+# 2) Red — fijar interface-name para WAN (enp0s20u1) y LAN (enp1s0)
+#    * En tu equipo, la WAN es el perfil "Conexión cableada 1"
+# -------------------------------------------------------------------
+nmcli con mod "Conexión cableada 1" connection.interface-name enp0s20u1 || true
+nmcli con mod "enp1s0"              connection.interface-name enp1s0    || true
+
+# -------------------------------------------------------------------
+# 3) Red — métricas de ruta (preferimos salir por WAN). LAN no es default
+# -------------------------------------------------------------------
+nmcli con mod "Conexión cableada 1" ipv4.route-metric 100 ipv6.route-metric 100 || true
+nmcli con mod "enp1s0"              ipv4.route-metric 300 ipv6.route-metric 300 || true
+nmcli connection reload || true
+
+# -------------------------------------------------------------------
+# 4) Red — configurar LAN con IP manual (192.168.2.3/24), sin gateway/DNS
+#    y marcar como never-default (no usar como salida a Internet)
+# -------------------------------------------------------------------
+nmcli con mod "enp1s0" ipv4.method manual ipv4.addresses "192.168.2.3/24" ipv4.gateway "" ipv4.dns "" ipv4.never-default yes || true
+
+# -------------------------------------------------------------------
+# 5) Red — aplicar cambios (subir WAN y reiniciar LAN)
+# -------------------------------------------------------------------
+nmcli con up "Conexión cableada 1" || true
+nmcli con down "enp1s0" || true
+nmcli con up   "enp1s0" || true
+
+# -------------------------------------------------------------------
+# 6) Actualizar sistema e instalar paquetes base
+# -------------------------------------------------------------------
+dnf update -y
+dnf install -y git compat-openssl11 glibc-langpack-es
+
+# -------------------------------------------------------------------
+# 7) Instalar .NET 5.0.408 en /opt/dotnet (SDK) y exportar variables globales
+# -------------------------------------------------------------------
+mkdir -p /opt/dotnet
+cd /tmp
+test -f dotnet-sdk-5.0.408-linux-x64.tar.gz || wget -q https://dotnetcli.azureedge.net/dotnet/Sdk/5.0.408/dotnet-sdk-5.0.408-linux-x64.tar.gz
+tar -zxf dotnet-sdk-5.0.408-linux-x64.tar.gz -C /opt/dotnet
+
+# Export global para shells de login
+cat >/etc/profile.d/dotnet.sh <<'EOF'
+export DOTNET_ROOT=/opt/dotnet
+export PATH=$DOTNET_ROOT:$PATH
+EOF
+
+# Cargarlo en la sesión actual (opcional)
+source /etc/profile.d/dotnet.sh
+
+# -------------------------------------------------------------------
+# 8) Firewall — abrir puertos de la app (5020, 5022) y VNC (5900)
+# -------------------------------------------------------------------
+firewall-cmd --add-port=5020/tcp --permanent
+firewall-cmd --add-port=5022/tcp --permanent
+firewall-cmd --add-port=5900/tcp --permanent
+firewall-cmd --reload
+
+# -------------------------------------------------------------------
+# 9) Código de la app — clonar en /home/DCMLockerLastUbuntu
+#    * Si ya existe la carpeta, salteá este 'git clone'
+# -------------------------------------------------------------------
+cd /home
+git clone https://github.com/DCMSolutions/DCMLockerLastUbuntu
+
+# -------------------------------------------------------------------
+# 10) Servicio systemd — dcmlocker.service
+#     * Ajusta WorkingDirectory/ExecStart si tu DLL está en otra ruta
+# -------------------------------------------------------------------
+cat >/etc/systemd/system/dcmlocker.service <<'EOF'
+[Unit]
+Description=dcmlocker
+After=network.target
+
+[Service]
+WorkingDirectory=/home/DCMLockerLastUbuntu
+ExecStart=/opt/dotnet/dotnet DCMLocker.Server.dll
+Restart=always
+SyslogIdentifier=dcmlocker
+User=root
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Recargar systemd y habilitar/iniciar el servicio
+systemctl daemon-reload
+systemctl enable dcmlocker
+systemctl restart dcmlocker || systemctl start dcmlocker
+
+# -------------------------------------------------------------------
+# 11) Entorno Kiosk — instalar GNOME Kiosk y Chromium
+# -------------------------------------------------------------------
+dnf install -y epel-release
+dnf install -y chromium
+dnf install -y gnome-kiosk gnome-kiosk-script-session
+
+# -------------------------------------------------------------------
+# 12) Usuario 'kiosk' — crear con contraseña 'AlmaLinux'
+# -------------------------------------------------------------------
+id -u kiosk || useradd -m -s /bin/bash kiosk
+echo 'kiosk:AlmaLinux' | chpasswd
+su - kiosk -c 'mkdir -p ~/.local/bin ~/.config ~/.local/share/xorg'
+chown -R kiosk:kiosk /home/kiosk/.local
+
+# -------------------------------------------------------------------
+# 13) GDM — autologin Xorg para usuario kiosk (Wayland desactivado)
+# -------------------------------------------------------------------
+mkdir -p /etc/gdm
+cat >/etc/gdm/custom.conf <<'EOF'
+[daemon]
+WaylandEnable=false
+AutomaticLoginEnable=true
+AutomaticLogin=kiosk
+
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+EOF
+
+# -------------------------------------------------------------------
+# 14) AccountsService — idioma/sesión por defecto para kiosk
+# -------------------------------------------------------------------
+mkdir -p /var/lib/AccountsService/users
+cat >/var/lib/AccountsService/users/kiosk <<'EOF'
+[User]
+Language=es_AR.utf8
+Session=gnome-kiosk-script
+SystemAccount=false
+EOF
+
+# -------------------------------------------------------------------
+# 15) Sesión y lanzador para gnome-kiosk-script
+# -------------------------------------------------------------------
+
+cat >/usr/share/xsessions/gnome-kiosk-script.desktop <<'EOF'
+[Desktop Entry]
+Name=Kiosk Script Session
+Comment=This session logs you into the session started by ~/.local/bin/gnome-kiosk-script
+Exec=gnome-session --session gnome-kiosk-script
+TryExec=gnome-session
+Type=Application
+DesktopNames=GNOME-Kiosk;GNOME;
+X-GDM-SessionRegisters=true
+EOF
+
+cat >/usr/share/applications/org.gnome.Kiosk.Script.desktop <<'EOF'
+[Desktop Entry]
+Name=Kiosk Script
+Type=Application
+Exec=/home/kiosk/.local/bin/gnome-kiosk-script
+X-GNOME-HiddenUnderSystemd=true
+EOF
+
+# -------------------------------------------------------------------
+# 16) Script del Kiosk — lanza Chromium fullscreen a reloader.html
+#     * Incluye: matar instancias previas, evitar suspensión, gsettings
+# -------------------------------------------------------------------
+cat >/home/kiosk/.local/bin/gnome-kiosk-script <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+export PATH="$HOME/.local/bin:$PATH"
+
+# Fallback: si no existe chromium-browser, crear alias local a /usr/bin/chromium
+if ! command -v chromium-browser >/dev/null 2>&1 && command -v chromium >/dev/null 2>&1; then
+  ln -sf "$(command -v chromium)" "$HOME/.local/bin/chromium-browser"
+fi
+
+
+pkill -9 chromium || true
+pkill -9 chromium-browser || true
+
+# Evitar apagado de pantalla/ahorro de energía
+xset s off
+xset -dpms
+xset s noblank
+
+# Ajustes de sesión GNOME
+gsettings set org.gnome.desktop.session idle-delay 0
+gsettings set org.gnome.desktop.screensaver lock-enabled false
+gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
+gsettings set org.gnome.settings-daemon.plugins.power idle-dim false
+gsettings set org.gnome.desktop.a11y.applications screen-magnifier-enabled false
+
+sleep 1
+
+# Lanzar Chromium en modo kiosk hacia un reloader local
+chromium-browser \
+  --disable-infobars \
+  --disable-pinch \
+  --kiosk \
+  --no-sandbox \
+  --incognito \
+  --user-data-dir=/tmp/kiosk-profile \
+  --force-device-scale-factor=1 \
+  "file:///home/kiosk/reloader.html" 2> "$HOME/kiosk-error.log"
+EOF
+
+chmod +x /home/kiosk/.local/bin/gnome-kiosk-script
+chown kiosk:kiosk /home/kiosk/.local/bin/gnome-kiosk-script
+
+# -------------------------------------------------------------------
+# 17) reloader.html — redirige al backend local http://localhost:5022
+# -------------------------------------------------------------------
+cat >/home/kiosk/reloader.html <<'EOF'
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="refresh" content="1;url=http://localhost:5022" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cargando Aplicación...</title>
+  <style>
+    body { background:#fff; color:#000; font-family:Arial, sans-serif;
+           display:flex; flex-direction:column; align-items:center;
+           justify-content:center; height:100vh; margin:0; }
+    h1   { font-size:2.0rem; margin-bottom:10px; }
+    p    { font-size:1.1rem; opacity:0.8; }
+    .spinner { margin-top:30px; width:40px; height:40px; border:4px solid #ccc;
+               border-top:4px solid #00bfff; border-radius:50%; animation:spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h1>Cargando Aplicación...</h1>
+  <p>Serás redirigido automáticamente</p>
+  <div class="spinner"></div>
+</body>
+</html>
+EOF
+chown kiosk:kiosk /home/kiosk/reloader.html
+
+# -------------------------------------------------------------------
+# 19) x11vnc — instalar, setear contraseña y crear servicio systemd
+#     * Password VNC: 'AlmaLinux'
+# -------------------------------------------------------------------
+dnf install -y x11vnc
+su - kiosk -c "mkdir -p ~/.vnc && x11vnc -storepasswd 'AlmaLinux' ~/.vnc/passwd"
+
+cat >/etc/systemd/system/x11vnc.service <<'EOF'
+[Unit]
+Description=x11vnc server on display :0
+After=graphical.target
+Requires=graphical.target
+
+[Service]
+ExecStart=/usr/bin/x11vnc -display :0 -auth guess -rfbauth /home/kiosk/.vnc/passwd -forever -loop -noxdamage -repeat -rfbport 5900 -shared
+Restart=always
+User=kiosk
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=graphical.target
+EOF
+
+systemctl daemon-reexec
+systemctl daemon-reload
+systemctl enable x11vnc
+systemctl restart x11vnc || systemctl start x11vnc
+
+# -------------------------------------------------------------------
+# 20) Arranque gráfico por defecto
+# -------------------------------------------------------------------
+systemctl enable gdm.service
+systemctl set-default graphical.target
+
+# -------------------------------------------------------------------
+# 21) Lo de tailscale
+# -------------------------------------------------------------------
+curl -fsSL https://tailscale.com/install.sh -o /tmp/tailscale-install.sh
+bash /tmp/tailscale-install.sh
+
+systemctl enable --now tailscaled
+
+tailscale up --authkey="tskey-auth-kpKVDKu6gT11CNTRL-qvrwRG2Ew296bpJ7WMmm29grFPi9Ri4Q3" --ssh --hostname="locker-$(date '+%Y%m%d-%H%M%S')"
+
+sudo reboot
