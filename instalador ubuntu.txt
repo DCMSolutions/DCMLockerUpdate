@@ -34,7 +34,7 @@ nmcli con up   "enp1s0" || true
 # 6) Actualizar sistema e instalar paquetes base
 # -------------------------------------------------------------------
 dnf update -y
-dnf install -y git compat-openssl11 glibc-langpack-es
+dnf install -y git compat-openssl11 glibc-langpack-es systemd-resolved
 
 # -------------------------------------------------------------------
 # 7) Instalar .NET 5.0.408 en /opt/dotnet (SDK) y exportar variables globales
@@ -67,6 +67,9 @@ firewall-cmd --reload
 # -------------------------------------------------------------------
 cd /home
 git clone https://github.com/DCMSolutions/DCMLockerLastUbuntu
+
+mkdir -p "/home/DCMLockerLastUbuntu/eventos"
+cp "/home/DCMLockerLastUbuntu/configjson.json.sample" "/home/DCMLockerLastUbuntu/configjson.json"
 
 # -------------------------------------------------------------------
 # 10) Servicio systemd — dcmlocker.service
@@ -286,5 +289,7 @@ bash /tmp/tailscale-install.sh
 systemctl enable --now tailscaled
 
 tailscale up --authkey="tskey-auth-kpKVDKu6gT11CNTRL-qvrwRG2Ew296bpJ7WMmm29grFPi9Ri4Q3" --ssh --hostname="locker-$(date '+%Y%m%d-%H%M%S')"
+
+
 
 sudo reboot
