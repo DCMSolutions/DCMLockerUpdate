@@ -283,6 +283,8 @@ systemctl set-default graphical.target
 # -------------------------------------------------------------------
 # 21) Lo de tailscale
 # -------------------------------------------------------------------
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+
 curl -fsSL https://tailscale.com/install.sh -o /tmp/tailscale-install.sh
 bash /tmp/tailscale-install.sh
 
@@ -290,6 +292,8 @@ systemctl enable --now tailscaled
 
 tailscale up --authkey="tskey-auth-kpKVDKu6gT11CNTRL-qvrwRG2Ew296bpJ7WMmm29grFPi9Ri4Q3" --ssh --hostname="locker-$(date '+%Y%m%d-%H%M%S')"
 
-
+systemctl restart systemd-resolved
+systemctl restart NetworkManager
+systemctl restart tailscaled
 
 sudo reboot
