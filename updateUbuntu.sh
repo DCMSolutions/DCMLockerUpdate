@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail #esto es para que cualquier error te saque del comando, no se si lo quiero o no, para pensar 
 
+sudo systemctl enable --now systemd-resolved
+
+
 TARGET_DIR="/home/DCMLockerLastUbuntu"
 
 git -C "$TARGET_DIR" fetch --depth=1 origin
