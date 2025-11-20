@@ -2,7 +2,11 @@
 set -euo pipefail #esto es para que cualquier error te saque del comando, no se si lo quiero o no, para pensar 
 
 sudo systemctl enable --now systemd-resolved
-
+sudo rm -f /etc/resolv.conf
+sudo ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+sudo systemctl restart systemd-resolved
+sudo systemctl restart NetworkManager
+sudo systemctl restart tailscaled
 
 TARGET_DIR="/home/DCMLockerLastUbuntu"
 
