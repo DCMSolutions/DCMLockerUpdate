@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /home/DCMLockerLastUbuntu
-gil pull
+sudo find /home -maxdepth 1 -type f -name 'eventos-*' -print -delete
 
-nohup bash -c 'sleep 2; reboot' >/dev/null 2>&1 &
+sudo rm -rf /home/DCMLockerLastUbuntu
+
+sudo git clone https://github.com/DCMSolutions/DCMLockerLastUbuntu.git /home/DCMLockerLastUbuntu
+
+sleep 1
+
+sudo reboot
