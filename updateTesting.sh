@@ -78,9 +78,19 @@ cat << 'EOF' > /home/pi/reloader.html
 </html>
 EOF
 
+apt install -y systemd-resolved
+
+systemctl restart systemd-resolved
+systemctl restart NetworkManager
+systemctl restart tailscaled
 
 sudo rm -r /home/pi/DCMLocker.bak
+sudo rm -rf /home/pi/DCMLocker.new
+
+sudo git clone --branch testing https://github.com/DCMSolutions/DCMLockerLast /home/pi/DCMLocker.new
+
 sudo mv /home/pi/DCMLocker /home/pi/DCMLocker.bak
 sudo rm -r /home/pi/'DCMLocker\Base'
-sudo git clone --branch testing https://github.com/DCMSolutions/DCMLockerLast /home/pi/DCMLocker
+sudo mv /home/pi/DCMLocker.new /home/pi/DCMLocker
+
 sudo reboot --force --reboot
