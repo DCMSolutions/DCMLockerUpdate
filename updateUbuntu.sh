@@ -12,7 +12,7 @@ cd /home
 find /home -maxdepth 1 -type f -name 'eventos-*' -print -delete
 
 rm -rf /home/DCMLockerLastUbuntu.new
-git clone --depth 1 https://git.dcmservidor.ar/dcm/dcmlockerlastubuntu.git /home/DCMLockerLastUbuntu.new
+git clone --depth 1 https://github.com/DCMSolutions/DCMLockerLastUbuntu.git /home/DCMLockerLastUbuntu.new
 
 rm -rf /home/DCMLockerLastUbuntu.old
 mv /home/DCMLockerLastUbuntu /home/DCMLockerLastUbuntu.old
