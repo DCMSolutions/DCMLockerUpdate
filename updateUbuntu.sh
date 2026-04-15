@@ -7,12 +7,18 @@ trap 'rc=$?; printf "[%s] ERROR: comando=%q | linea=%s | exit=%s\n" \
 
 echo "=== Inicio: $(date -Is) ==="
 
+GITLAB_URL="https://git.dcmservidor.ar"
+PROJECT_ID="2"
+
 cd /home
 
 find /home -maxdepth 1 -type f -name 'eventos-*' -print -delete
 
 rm -rf /home/DCMLockerLastUbuntu.new
-git clone --depth 1 https://github.com/DCMSolutions/DCMLockerLastUbuntu.git /home/DCMLockerLastUbuntu.new
+mkdir -p /home/DCMLockerLastUbuntu.new
+curl -sfL \
+  "$GITLAB_URL/api/v4/projects/$PROJECT_ID/packages/generic/dcmlocker/latest/dcmlocker.tar.gz" \
+  | tar -xz -C /home/DCMLockerLastUbuntu.new
 
 rm -rf /home/DCMLockerLastUbuntu.old
 mv /home/DCMLockerLastUbuntu /home/DCMLockerLastUbuntu.old
