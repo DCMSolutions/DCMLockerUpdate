@@ -200,10 +200,25 @@ gsettings set org.gnome.desktop.a11y.applications screen-magnifier-enabled false
 
 sleep 1
 
-# Lanzar Chromium en modo kiosk hacia un reloader local
+# Lanzar Chromium en modo kiosk hacia un reloader local.
+# Flags (uno por linea, en el mismo orden que abajo):
+#   --disable-infobars      Oculta las barras de aviso de Chromium (ej. "Chrome esta
+#                           siendo controlado por software automatizado").
+#   --disable-pinch         Desactiva el zoom por gesto de pellizco (pinch) en la pantalla tactil.
+#   --disable-features=OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation
+#                           Desactiva el gesto "deslizar para volver/avanzar" (swipe = atras/adelante)
+#                           en tactil y touchpad.
+#   --kiosk                 Modo kiosko a pantalla completa: sin barra de direcciones, pestañas ni controles.
+#   --no-sandbox            Desactiva el sandbox de Chromium (necesario para correr como el usuario kiosk).
+#   --incognito             Sesion de incognito: sin historial ni datos persistentes entre arranques.
+#   --user-data-dir=/tmp/kiosk-profile   Perfil efimero en /tmp; se descarta en cada reinicio del locker.
+#   --force-device-scale-factor=1        Fija la escala de la interfaz en 1 (sin escalado por DPI).
+# Argumento final: file:///home/kiosk/reloader.html (pagina que redirige al backend local);
+# "2>" redirige los errores de Chromium a ~/kiosk-error.log.
 chromium-browser \
   --disable-infobars \
   --disable-pinch \
+  --disable-features=OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation \
   --kiosk \
   --no-sandbox \
   --incognito \
