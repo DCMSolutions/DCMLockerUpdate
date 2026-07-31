@@ -7,9 +7,17 @@
 # x11vnc and Tailscale.
 #
 # Run as root on the locker, either from a checkout:
-#     sudo bash instalador-ubuntu.sh
+#
+#     sudo TS_AUTHKEY=tskey-auth-kpKVDKu6gT11CNTRL-qvrwRG2Ew296bpJ7WMmm29grFPi9Ri4Q3 \
+#          bash instalador-ubuntu.sh
+#
 # or straight off the repo:
-#     curl -fsSL https://raw.githubusercontent.com/DCMSolutions/DCMLockerUpdate/main/instalador-ubuntu.sh | sudo bash
+#
+#     curl -fsSL https://raw.githubusercontent.com/DCMSolutions/DCMLockerUpdate/main/instalador-ubuntu.sh | sudo TS_AUTHKEY=tskey-auth-kpKVDKu6gT11CNTRL-qvrwRG2Ew296bpJ7WMmm29grFPi9Ri4Q3 bash
+#
+# In the piped form the variables go AFTER sudo. Putting them in front of curl
+# sets them for curl, and sudo resets the environment anyway, so the script sees
+# nothing: the install still succeeds but the locker never joins the tailnet.
 #
 # Re-running is safe: every step either overwrites its own output or checks for
 # what it creates, so a partial install can be finished by running it again.
@@ -18,12 +26,18 @@
 #   CANAL=release|latest   Update channel to install from. Default "release" —
 #                          the pinned build production lockers run. Use "latest"
 #                          only for a test locker.
-#   TS_AUTHKEY=tskey-...   Tailscale auth key. Never commit one here: this repo
-#                          is publicly mirrored. Without it the script installs
-#                          and enables tailscaled but does not join the tailnet.
-#   LOCKER_NAME=<name>     Tailnet hostname; becomes "locker-<name>". Defaults to
-#                          this machine's hostname so a reinstall reuses its node
-#                          instead of leaving a duplicate behind.
+#   TS_AUTHKEY=tskey-...   Tailscale auth key — the fleet key is in the examples
+#                          above. This repo is publicly mirrored, so treat that
+#                          key as compromised and rotate it. Without the variable
+#                          the script installs and enables tailscaled but does
+#                          not join the tailnet.
+#   LOCKER_NAME=<name>     Tailnet node name; becomes "locker-<name>". Defaults
+#                          to this machine's hostname so a reinstall reuses its
+#                          node instead of leaving a duplicate behind. Set it:
+#                          a stock install that was never named reports
+#                          "localhost", and the fallback name it gets instead
+#                          ("locker-sin-nombre-<id>") means nothing to anyone
+#                          reading the Tailscale console.
 #   KIOSK_PASS=<pass>      Password for the local 'kiosk' user. Default AlmaLinux.
 #   VNC_PASS=<pass>        Password for the VNC server on 5900. Default AlmaLinux.
 #   WAN_CON / LAN_CON      NetworkManager connection names. Defaults match the
@@ -54,7 +68,27 @@ LAN_IP="${LAN_IP:-192.168.2.3/24}"
 KIOSK_PASS="${KIOSK_PASS:-AlmaLinux}"
 VNC_PASS="${VNC_PASS:-AlmaLinux}"
 TS_AUTHKEY="${TS_AUTHKEY:-}"
-LOCKER_NAME="${LOCKER_NAME:-$(hostname -s)}"
+
+# Tailnet node name. A stock AlmaLinux install that was never given a hostname
+# reports "localhost", which would have every locker in the fleet claiming the
+# same node — so fall back to a stable per-machine id and say so, rather than
+# handing out a name that collides.
+_default_locker_name() {
+  local h; h="$(hostname -s 2>/dev/null || true)"
+  case "$h" in
+    ""|localhost|localhost.localdomain)
+      # machine-id can be absent or empty (it is written at first boot), so an
+      # exit-status check is not enough — test the value.
+      local id; id="$(cut -c1-8 /etc/machine-id 2>/dev/null || true)"
+      printf 'sin-nombre-%s' "${id:-desconocido}" ;;
+    # A host already named "locker-algo" would otherwise become locker-locker-algo.
+    locker-*) printf '%s' "${h#locker-}" ;;
+    *) printf '%s' "$h" ;;
+  esac
+}
+LOCKER_NAME_EXPLICIT=1
+[ -n "${LOCKER_NAME:-}" ] || LOCKER_NAME_EXPLICIT=0
+LOCKER_NAME="${LOCKER_NAME:-$(_default_locker_name)}"
 
 SKIP_NETWORK="${SKIP_NETWORK:-0}"
 NO_REBOOT="${NO_REBOOT:-0}"
@@ -407,10 +441,12 @@ fi
 systemctl enable --now tailscaled
 
 if [ -n "$TS_AUTHKEY" ]; then
+  [ "$LOCKER_NAME_EXPLICIT" = "1" ] \
+    || warn "no pasaste LOCKER_NAME: el nodo se va a llamar 'locker-${LOCKER_NAME}'. Renombralo en la consola de Tailscale o volvé a correr con LOCKER_NAME=<nombre>."
   # Hostname derives from LOCKER_NAME (not a timestamp) so reinstalling a locker
   # reuses its tailnet node instead of leaving a duplicate behind.
   tailscale up --authkey="$TS_AUTHKEY" --ssh --hostname="locker-${LOCKER_NAME}" \
-    || warn "'tailscale up' falló. Revisá la auth key y corré el comando a mano."
+    || warn "'tailscale up' falló (¿auth key vencida o revocada?). El resto de la instalación sigue; corré el comando a mano cuando tengas una key válida."
 else
   warn "sin TS_AUTHKEY: el locker NO se unió a la tailnet."
   info "Para unirlo: sudo tailscale up --authkey=<key> --ssh --hostname=locker-${LOCKER_NAME}"
