@@ -1,0 +1,6 @@
+# Every file here is a shell script that lockers fetch over the network and pipe
+# straight into `sudo bash` as root. A CRLF blob committed from a Windows
+# checkout makes every line of it fail with `$'\r': command not found`, halfway
+# through provisioning a device, so line endings are pinned to LF on every
+# platform regardless of the committer's core.autocrlf.
+* text=auto eol=lf
