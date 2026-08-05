@@ -93,6 +93,14 @@ LOCKER_NAME="${LOCKER_NAME:-$(_default_locker_name)}"
 SKIP_NETWORK="${SKIP_NETWORK:-0}"
 NO_REBOOT="${NO_REBOOT:-0}"
 
+# Pin the locale. Under the C locale nmcli transliterates non-ASCII output, so
+# the stock Spanish profile "Conexión cableada 1" is printed back as
+# "Conexi?n cableada 1" and no comparison against its real name can match — the
+# network step would then skip the LAN silently. `sudo` resets the environment,
+# so the locale here is whatever the invoking shell happened to have. C.UTF-8 is
+# built into glibc on AlmaLinux 9, so this needs no package.
+export LC_ALL=C.UTF-8
+
 log()  { printf '\n=== %s ===\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 warn() { printf '    AVISO: %s\n' "$*" >&2; }
@@ -126,7 +134,21 @@ dnf install -y git tar compat-openssl11 libicu krb5-libs zlib \
 # The LAN side carries the lock controller, so a silently-unconfigured LAN means
 # a locker that boots, serves its UI, and cannot open a single box. Failing here
 # is better than discovering it on site.
+#
+# Two things this step gets wrong easily, both silent:
+#
+#   * Which profile is which. The USB adapter's profile is called "Conexión
+#     cableada 1" on the older bench machines and "enp0s20u1" on the Celeron
+#     AIOs. Keying off one name skips the whole block on the other machine, and
+#     the metric line is what keeps the default route off the lock-controller
+#     segment. See find_con_uuid below for how the profile is located instead.
+#   * connection.autoconnect, which is set explicitly here because `con up`
+#     activates for the current boot only. Without it the LAN comes back down
+#     after the reboot at the end of this script — the install verifies clean and
+#     the locker still cannot reach the controller.
 log "2) Red (WAN preferida, LAN estática hacia la placa de cerraduras)"
+NET_CONFIGURED=0
+LAN_UUID=""
 if [ "$SKIP_NETWORK" = "1" ]; then
   info "SKIP_NETWORK=1 — no se toca NetworkManager."
 elif ! command -v nmcli >/dev/null 2>&1; then
@@ -134,30 +156,61 @@ elif ! command -v nmcli >/dev/null 2>&1; then
 else
   nmcli -t -f NAME,DEVICE connection show | sed 's/^/    perfil: /'
 
-  if nmcli -t -f NAME connection show | grep -qxF "$WAN_CON"; then
-    nmcli con mod "$WAN_CON" connection.interface-name "$WAN_IFACE"
-    nmcli con mod "$WAN_CON" ipv4.route-metric 100 ipv6.route-metric 100
-    nmcli con up  "$WAN_CON" || warn "no se pudo levantar la WAN '$WAN_CON'."
+  # Resolve a profile to its UUID, and drive every later nmcli call with that
+  # UUID rather than the name. UUIDs are ASCII and stable, so an accented profile
+  # name never has to survive a round trip through nmcli.
+  #
+  # Match order:
+  #   1. persistent connection.interface-name — ASCII, and unlike the runtime
+  #      DEVICE column it still matches while the port is down, which is the
+  #      state the network manual describes as "-- en la columna device".
+  #   2. the profile's name, either the configured one or the device name — the
+  #      Celeron AIOs name the profile after its device.
+  find_con_uuid() {
+    local want_name="$1" want_dev="$2" u val
+    for u in $(nmcli -t -f UUID connection show); do
+      val="$(nmcli -g connection.interface-name con show "$u" 2>/dev/null || true)"
+      [ "$val" = "$want_dev" ] && { printf '%s' "$u"; return 0; }
+    done
+    for u in $(nmcli -t -f UUID connection show); do
+      val="$(nmcli -g connection.id con show "$u" 2>/dev/null || true)"
+      { [ "$val" = "$want_name" ] || [ "$val" = "$want_dev" ]; } && { printf '%s' "$u"; return 0; }
+    done
+    printf ''
+  }
+
+  WAN_UUID="$(find_con_uuid "$WAN_CON" "$WAN_IFACE")"
+  LAN_UUID="$(find_con_uuid "$LAN_CON" "$LAN_CON")"
+
+  if [ -n "$WAN_UUID" ]; then
+    info "perfil WAN: '$(nmcli -g connection.id con show "$WAN_UUID")'"
+    nmcli con mod "$WAN_UUID" connection.interface-name "$WAN_IFACE"
+    nmcli con mod "$WAN_UUID" connection.autoconnect yes
+    nmcli con mod "$WAN_UUID" ipv4.route-metric 100 ipv6.route-metric 100
+    nmcli con up  "$WAN_UUID" || warn "no se pudo levantar la WAN."
   else
-    warn "no existe el perfil WAN '$WAN_CON'. Ajustá WAN_CON=... y volvé a correr el script."
+    warn "no se encontró perfil WAN (ni por dispositivo '$WAN_IFACE' ni por nombre '$WAN_CON'). Ajustá WAN_IFACE=/WAN_CON= y volvé a correr el script."
   fi
 
-  if nmcli -t -f NAME connection show | grep -qxF "$LAN_CON"; then
-    nmcli con mod "$LAN_CON" connection.interface-name "$LAN_CON"
-    nmcli con mod "$LAN_CON" ipv4.route-metric 300 ipv6.route-metric 300
-    nmcli con mod "$LAN_CON" ipv4.method manual ipv4.addresses "$LAN_IP" \
-                             ipv4.gateway "" ipv4.dns "" ipv4.never-default yes
+  if [ -n "$LAN_UUID" ]; then
+    info "perfil LAN: '$(nmcli -g connection.id con show "$LAN_UUID")'"
+    nmcli con mod "$LAN_UUID" connection.interface-name "$LAN_CON"
+    nmcli con mod "$LAN_UUID" connection.autoconnect yes
+    nmcli con mod "$LAN_UUID" ipv4.route-metric 300 ipv6.route-metric 300
+    nmcli con mod "$LAN_UUID" ipv4.method manual ipv4.addresses "$LAN_IP" \
+                              ipv4.gateway "" ipv4.dns "" ipv4.never-default yes
     nmcli connection reload
-    nmcli con down "$LAN_CON" || true
-    nmcli con up   "$LAN_CON" || warn "no se pudo levantar la LAN '$LAN_CON'."
+    nmcli con down "$LAN_UUID" || true
+    nmcli con up   "$LAN_UUID" || warn "no se pudo levantar la LAN."
 
     if ip -4 addr show | grep -q "${LAN_IP%%/*}"; then
       info "LAN en ${LAN_IP} — OK."
     else
       warn "la LAN no quedó en ${LAN_IP}. El locker no va a poder abrir cajas hasta arreglarlo."
     fi
+    NET_CONFIGURED=1
   else
-    warn "no existe el perfil LAN '$LAN_CON'. Ajustá LAN_CON=... y volvé a correr el script."
+    warn "no se encontró perfil LAN (ni por dispositivo ni por nombre '$LAN_CON'). Ajustá LAN_CON= y volvé a correr el script."
   fi
 fi
 
@@ -346,6 +399,13 @@ sleep 1
 #   --kiosk                 Modo kiosko a pantalla completa: sin barra de direcciones, pestañas ni controles.
 #   --no-sandbox            Desactiva el sandbox de Chromium (necesario para correr como el usuario kiosk).
 #   --incognito             Sesion de incognito: sin historial ni datos persistentes entre arranques.
+#   --password-store=basic  Guarda las credenciales en un archivo propio en vez de pedirle un llavero
+#                           al Secret Service. Sin este flag Chromium le pide uno a GNOME Keyring al
+#                           arrancar, y como el usuario kiosk entra por autologin no hay llavero que
+#                           desbloquear: aparece el dialogo "Elija la contraseña para el deposito de
+#                           claves" encima del kiosko en CADA encendido. Cancelarlo no crea nada, asi
+#                           que vuelve a salir en el arranque siguiente. Con perfil efimero e
+#                           incognito no hay credenciales que guardar, asi que no se pierde nada.
 #   --user-data-dir=/tmp/kiosk-profile   Perfil efimero en /tmp; se descarta en cada reinicio del locker.
 #   --force-device-scale-factor=1        Fija la escala de la interfaz en 1 (sin escalado por DPI).
 # Argumento final: file:///home/kiosk/reloader.html (pagina que redirige al backend local);
@@ -357,6 +417,7 @@ chromium-browser \
   --kiosk \
   --no-sandbox \
   --incognito \
+  --password-store=basic \
   --user-data-dir=/tmp/kiosk-profile \
   --force-device-scale-factor=1 \
   "file:///home/kiosk/reloader.html" 2> "$HOME/kiosk-error.log"
@@ -465,12 +526,24 @@ verify "runtime .NET"                     "test -x /opt/dotnet/dotnet"
 verify "servicio dcmlocker habilitado"    "systemctl is-enabled --quiet dcmlocker"
 verify "servicio dcmlocker activo"        "systemctl is-active --quiet dcmlocker"
 verify "lanzador del kiosk"               "test -x /home/kiosk/.local/bin/gnome-kiosk-script"
+verify "kiosk sin diálogo de llavero"     "grep -qF -- '--password-store=basic' /home/kiosk/.local/bin/gnome-kiosk-script"
 verify "reloader.html"                    "test -f /home/kiosk/reloader.html"
 verify "autologin de kiosk"               "grep -q '^AutomaticLogin=kiosk' /etc/gdm/custom.conf"
 verify "arranque gráfico"                 "test \"\$(systemctl get-default)\" = graphical.target"
 verify "x11vnc habilitado"                "systemctl is-enabled --quiet x11vnc"
 verify "systemd-resolved habilitado"      "systemctl is-enabled --quiet systemd-resolved"
 verify "DNS resuelve"                     "getent hosts git.dcmservidor.ar"
+
+# The LAN checks only run when step 2 actually configured a profile — a machine
+# with SKIP_NETWORK=1, or without NetworkManager, has nothing to assert against.
+# autoconnect is checked alongside the address for the same reason the service is
+# checked with is-enabled as well as is-active: one is this boot, the other is
+# every boot after it, and the reboot below is what turns the difference into a
+# locker that cannot open a box.
+if [ "$NET_CONFIGURED" = "1" ]; then
+  verify "LAN en ${LAN_IP%%/*}"             "ip -4 addr show | grep -q '${LAN_IP%%/*}'"
+  verify "LAN autoconnect (sobrevive el reboot)" "[ \"\$(nmcli -g connection.autoconnect con show '$LAN_UUID')\" = yes ]"
+fi
 
 # Give the app a moment to bind before checking the port it must serve.
 for _ in $(seq 1 15); do
