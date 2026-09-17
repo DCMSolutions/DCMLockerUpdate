@@ -11,3 +11,5 @@ Shell scripts that physical lockers **fetch over the network and run as root** t
 ## Testing
 
 Run any root/destructive script **unmodified** in a throwaway `almalinux:9` container — never against a real locker, and never by stripping a script's own guards. Real-hardware validation happens on the dedicated testing locker and gates fleet rollout.
+
+Scripts for Raspberry Pi lockers (Raspbian 11, 32-bit `armhf` userland) use a throwaway `debian:bullseye` container under `--platform linux/arm/v7` instead. That exercises the script only: .NET 5 ARM32 aborts under QEMU emulation, so the app starting on the Pi is proven on the Pi testing locker.
