@@ -27,6 +27,21 @@ warn(){ printf '    AVISO: %s\n' "$*"; }
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 fail(){ printf 'ERROR: %s\n' "$*" >&2; return 1; }
 have_systemd(){ [ -d /run/systemd/system ]; }
+# apt does not wait for its locks (apt 2.2: DPkg::Lock::Timeout covers the dpkg frontend lock only, never
+# the lists lock), and the daily apt timers hold them briefly, so apt-get is retried for two minutes on a
+# lock. Any other failure prints apt's output and returns 1.
+apt_retry(){
+  local attempt out
+  for attempt in $(seq 1 12); do
+    if out="$(apt-get "$@" 2>&1)"; then return 0; fi
+    case "$out" in
+      *"Could not get lock"*) info "apt ocupado (intento $attempt/12), reintento en 10 s"; sleep 10 ;;
+      *) printf '%s\n' "$out" | tail -n 15 >&2; return 1 ;;
+    esac
+  done
+  printf 'apt-get %s: el lock de apt sigue ocupado tras dos minutos\n' "$1" >&2
+  return 1
+}
 
 # Everything this run creates is removed again if a step fails before the unit swap,
 # so a failed run leaves Gen-1 as it was and can be retried.
@@ -74,8 +89,7 @@ info "LockerID $LOCKER_ID"
 # makes apt reject the repos' Release files (the Pi has no RTC and starts on its last saved time); a dpkg
 # interrupted by a power cut blocks every install; a source the site blocks or a mirror that moved fails
 # apt-get update, which fails when ANY configured source does; a full boot medium stops the payload. The
-# one transient case is the lists lock held by the daily apt timers: apt 2.2 does not wait for that lock
-# (DPkg::Lock::Timeout covers the dpkg lock only), so the update is retried for two minutes.
+# one transient case is the lock held by the daily apt timers, which apt_retry waits out.
 log "0b) Sistema de paquetes"
 if command -v timedatectl >/dev/null 2>&1; then
   if timedatectl show -p NTPSynchronized 2>/dev/null | grep -qx 'NTPSynchronized=yes'; then
@@ -99,20 +113,8 @@ for spec in "$STATE_DIR:1024" "/var/lib/apt:200"; do
   [ "$have" -ge "$need" ] || die "quedan ${have} MB libres en $d: hacen falta ${need}"
   info "espacio libre en $d: ${have} MB"
 done
-for attempt in $(seq 1 12); do
-  if OUT="$(apt-get update 2>&1)"; then
-    info "apt-get update OK"
-    break
-  fi
-  if printf '%s\n' "$OUT" | grep -q 'Could not get lock'; then
-    [ "$attempt" = 12 ] && die "apt-get update: el lock de apt sigue ocupado tras dos minutos"
-    info "apt ocupado (intento $attempt/12), reintento en 10 s"
-    sleep 10
-    continue
-  fi
-  printf '%s\n' "$OUT" | tail -n 15 >&2
-  die "apt-get update falló: revisar /etc/apt/sources.list y /etc/apt/sources.list.d/ con la salida de arriba"
-done
+apt_retry update || die "apt-get update falló: revisar /etc/apt/sources.list y /etc/apt/sources.list.d/ con la salida de arriba"
+info "apt-get update OK"
 
 # --- 1) payload -------------------------------------------------------------
 log "1) Firmware Gen-2, canal $CANAL"
@@ -123,6 +125,22 @@ curl -fsSL "$PKG_URL" | tar -xz -C "${APP_DIR}.new"
 CREATED+=("$APP_DIR")
 mv "${APP_DIR}.new" "$APP_DIR"
 info "instalado en $APP_DIR (VERSION $(cat "$APP_DIR/VERSION" 2>/dev/null || echo '?'))"
+
+# --- 1b) pointer hider ------------------------------------------------------
+# The all-in-ones' GNOME session hides the pointer on touch input by itself; LXDE does not. The kiosk
+# launcher (step 5) starts unclutter-xfixes, which hides the pointer after a second without motion and
+# shows it again on any motion — a tap included, which is accepted — so a support session's mouse keeps
+# its pointer. Installed here, before the unit swap, so a failed install undoes the run like any other
+# step; the package itself stays installed, which is harmless. Recommends are skipped: unclutter-startup
+# would add a second, session-wide copy with its own timeout.
+log "1b) Ocultador del cursor (unclutter-xfixes)"
+if dpkg -l unclutter-xfixes 2>/dev/null | grep -q '^ii '; then
+  info "unclutter-xfixes ya instalado"
+else
+  DEBIAN_FRONTEND=noninteractive apt_retry install -y -qq --no-install-recommends unclutter-xfixes \
+    || fail "no se pudo instalar unclutter-xfixes"
+  info "unclutter-xfixes instalado ($(dpkg -l unclutter-xfixes | awk '/^ii/ { print $3 }'))"
+fi
 
 # --- 2) locker state --------------------------------------------------------
 log "2) Estado del locker"
@@ -185,23 +203,33 @@ log "5) Kiosk"
 # Chromium launches as on the all-in-ones (instalador-ubuntu.sh): incognito on a throwaway profile, so no
 # page zoom, HTTP cache or service worker carries over from Gen-1 or from a previous firmware build. Gen-1's
 # persistent profile stays on disk, unused. --no-sandbox is left out: the all-in-ones need it for their
-# kiosk user, and Gen-1's launcher runs Chromium as pi without it.
+# kiosk user, and Gen-1's launcher runs Chromium as pi without it. Two things the all-in-ones get from
+# their GNOME Kiosk session are done here instead: the pointer is hidden by unclutter-xfixes (step 1b),
+# and Chromium is relaunched when it exits, which is what "Reiniciar navegador" (pkill -f chromium)
+# relies on — LXDE runs the launcher once per session and would otherwise leave the desktop on screen.
 cp -p "$KIOSK_LAUNCHER" "${KIOSK_LAUNCHER}.gen1"
 info "lanzador Gen-1 guardado en ${KIOSK_LAUNCHER}.gen1"
 cat > "$KIOSK_LAUNCHER" <<'EOF'
 #!/usr/bin/env bash
-chromium-browser \
-  --disable-infobars \
-  --disable-pinch \
-  --disable-features=OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation \
-  --kiosk \
-  --incognito \
-  --password-store=basic \
-  --user-data-dir=/tmp/kiosk-profile \
-  --force-device-scale-factor=1 \
-  "file:///home/pi/reloader.html" 2> "$HOME/kiosk-error.log"
+# Started once per session by the LXDE autostart entry; the loop brings Chromium back when it exits.
+# Neither this script's name nor unclutter's matches the firmware's "pkill -f chromium".
+pgrep -f unclutter-xfixes >/dev/null || unclutter-xfixes --timeout 1 --fork
+: > "$HOME/kiosk-error.log"
+while true; do
+  chromium-browser \
+    --disable-infobars \
+    --disable-pinch \
+    --disable-features=OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation \
+    --kiosk \
+    --incognito \
+    --password-store=basic \
+    --user-data-dir=/tmp/kiosk-profile \
+    --force-device-scale-factor=1 \
+    "file:///home/pi/reloader.html" 2>> "$HOME/kiosk-error.log"
+  sleep 2
+done
 EOF
-info "kiosk en incógnito sobre /tmp/kiosk-profile desde el próximo arranque"
+info "kiosk en incógnito sobre /tmp/kiosk-profile, cursor oculto y navegador relanzado desde el próximo arranque"
 
 # --- 6) activation ----------------------------------------------------------
 log "6) Activación"
