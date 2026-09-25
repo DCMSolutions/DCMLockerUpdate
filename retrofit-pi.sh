@@ -68,6 +68,52 @@ LOCKER_ID="$(grep -oE '"LockerID":"[^"]*"' "$GEN1_STATE/LoackerConfig.config" | 
 [ -n "$LOCKER_ID" ] || die "LoackerConfig.config no tiene LockerID"
 info "LockerID $LOCKER_ID"
 
+# --- 0b) package manager ----------------------------------------------------
+# A unit whose package manager cannot run cannot be patched, so it is not retrofitted either. Each case
+# below is a condition for a person to look at first, not something to work around: a clock that is behind
+# makes apt reject the repos' Release files (the Pi has no RTC and starts on its last saved time); a dpkg
+# interrupted by a power cut blocks every install; a source the site blocks or a mirror that moved fails
+# apt-get update, which fails when ANY configured source does; a full boot medium stops the payload. The
+# one transient case is the lists lock held by the daily apt timers: apt 2.2 does not wait for that lock
+# (DPkg::Lock::Timeout covers the dpkg lock only), so the update is retried for two minutes.
+log "0b) Sistema de paquetes"
+if command -v timedatectl >/dev/null 2>&1; then
+  if timedatectl show -p NTPSynchronized 2>/dev/null | grep -qx 'NTPSynchronized=yes'; then
+    info "reloj sincronizado por NTP ($(date -Is))"
+  else
+    die "reloj sin sincronizar por NTP ($(date -Is)): apt rechaza los índices con un reloj atrasado"
+  fi
+else
+  warn "sin timedatectl: no se verifica el reloj"
+fi
+AUDIT="$(dpkg --audit 2>&1 || true)"
+if [ -n "$AUDIT" ]; then
+  printf '%s\n' "$AUDIT" | head -n 20 >&2
+  die "dpkg con paquetes a medio instalar: correr 'dpkg --configure -a' y revisar antes del retrofit"
+fi
+info "dpkg sin paquetes pendientes"
+free_mb(){ df -Pk "$1" | awk 'NR==2 { print int($4/1024) }'; }
+# /home takes the firmware (updateUbuntu.sh later keeps .old and .new beside it); /var/lib/apt the indexes.
+for spec in "$STATE_DIR:1024" "/var/lib/apt:200"; do
+  d="${spec%%:*}"; need="${spec##*:}"; have="$(free_mb "$d")"
+  [ "$have" -ge "$need" ] || die "quedan ${have} MB libres en $d: hacen falta ${need}"
+  info "espacio libre en $d: ${have} MB"
+done
+for attempt in $(seq 1 12); do
+  if OUT="$(apt-get update 2>&1)"; then
+    info "apt-get update OK"
+    break
+  fi
+  if printf '%s\n' "$OUT" | grep -q 'Could not get lock'; then
+    [ "$attempt" = 12 ] && die "apt-get update: el lock de apt sigue ocupado tras dos minutos"
+    info "apt ocupado (intento $attempt/12), reintento en 10 s"
+    sleep 10
+    continue
+  fi
+  printf '%s\n' "$OUT" | tail -n 15 >&2
+  die "apt-get update falló: revisar /etc/apt/sources.list y /etc/apt/sources.list.d/ con la salida de arriba"
+done
+
 # --- 1) payload -------------------------------------------------------------
 log "1) Firmware Gen-2, canal $CANAL"
 CREATED+=("${APP_DIR}.new")
