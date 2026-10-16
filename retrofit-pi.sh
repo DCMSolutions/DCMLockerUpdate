@@ -221,6 +221,7 @@ while true; do
     --disable-pinch \
     --disable-features=OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation \
     --kiosk \
+    --no-first-run \
     --incognito \
     --password-store=basic \
     --user-data-dir=/tmp/kiosk-profile \

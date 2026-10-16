@@ -355,9 +355,9 @@ Exec=/home/kiosk/.local/bin/gnome-kiosk-script
 X-GNOME-HiddenUnderSystemd=true
 EOF
 
-# The launcher is written ONCE, here. updateUbuntu.sh only swaps the app
-# tarball, so a Chromium flag added below reaches new installs only; deployed
-# lockers need the corresponding one-shot patch script.
+# The launcher is written ONCE, here. updateUbuntu.sh inserts the flags in its
+# KIOSK_FLAGS list into an installed launcher on every update, so a Chromium
+# flag added below reaches deployed lockers only when it is added there too.
 cat >/home/kiosk/.local/bin/gnome-kiosk-script <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -397,6 +397,10 @@ sleep 1
 #                           Desactiva el gesto "deslizar para volver/avanzar" (swipe = atras/adelante)
 #                           en tactil y touchpad.
 #   --kiosk                 Modo kiosko a pantalla completa: sin barra de direcciones, pestañas ni controles.
+#   --no-first-run          Omite la pantalla de primer arranque de Chromium. Como el perfil es
+#                           efimero (ver --user-data-dir), cada encendido es un primer arranque y
+#                           sin este flag Chromium puede mostrar su pagina de condiciones del
+#                           servicio encima del kiosko.
 #   --no-sandbox            Desactiva el sandbox de Chromium (necesario para correr como el usuario kiosk).
 #   --incognito             Sesion de incognito: sin historial ni datos persistentes entre arranques.
 #   --password-store=basic  Guarda las credenciales en un archivo propio en vez de pedirle un llavero
@@ -415,6 +419,7 @@ chromium-browser \
   --disable-pinch \
   --disable-features=OverscrollHistoryNavigation,TouchpadOverscrollHistoryNavigation \
   --kiosk \
+  --no-first-run \
   --no-sandbox \
   --incognito \
   --password-store=basic \
