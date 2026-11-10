@@ -40,13 +40,24 @@
 #                          reading the Tailscale console.
 #   KIOSK_PASS=<pass>      Password for the local 'kiosk' user. Default AlmaLinux.
 #   VNC_PASS=<pass>        Password for the VNC server on 5900. Default AlmaLinux.
-#   WAN_CON / LAN_CON      NetworkManager connection names. Defaults match the
-#                          stock locker image; the script fails loudly if they
-#                          are not found rather than leaving the LAN unconfigured.
+#   WAN_IFACE / WAN_CON    Device and profile name of the internet port. Defaults
+#                          match the USB adapter on the stock image. Not needed
+#                          elsewhere: when neither is found, whatever port the
+#                          internet arrives on (another adapter, Wi-Fi) is taken.
+#   LAN_CON=<device>       Port wired to the lock controller. Default enp1s0. A
+#                          profile is created for it when it has none.
 #   LAN_IP=<cidr>          Static LAN address. Default 192.168.2.3/24 — the subnet
 #                          the lock controller (192.168.2.178) lives on.
+#   NET_WAIT=<seconds>     How long to wait for internet before giving up.
+#                          Default 120 — at first boot the link can come up late.
 #   SKIP_NETWORK=1         Leave NetworkManager alone (machine already wired up).
 #   NO_REBOOT=1            Finish without rebooting.
+#
+# The network step never cuts the machine's own internet: when it arrives on the
+# lock-controller port (a bench machine, or a site where one switch carries both)
+# that port keeps its DHCP and gets the static address on top. So the script runs
+# unattended whatever the port layout; it stops only when there is no internet
+# at all, before it has changed anything.
 #
 set -Eeuo pipefail
 
@@ -92,6 +103,9 @@ LOCKER_NAME="${LOCKER_NAME:-$(_default_locker_name)}"
 
 SKIP_NETWORK="${SKIP_NETWORK:-0}"
 NO_REBOOT="${NO_REBOOT:-0}"
+NET_WAIT="${NET_WAIT:-120}"
+# Reachability probe: the server the application package comes from (step 5).
+NET_PROBE_URL="$GITLAB_URL"
 
 # Pin the locale. Under the C locale nmcli transliterates non-ASCII output, so
 # the stock Spanish profile "Conexión cableada 1" is printed back as
@@ -113,6 +127,106 @@ trap 'rc=$?; printf "\nInstalación INTERRUMPIDA: comando=%q | línea=%s | exit=
 [ "$CANAL" = "release" ] || [ "$CANAL" = "latest" ] || die "CANAL inválido: '$CANAL'. Use 'release' o 'latest'."
 grep -qi 'almalinux' /etc/os-release || warn "esto no parece un AlmaLinux; el script asume dnf/firewalld/GDM."
 command -v curl >/dev/null 2>&1 || die "falta curl (lo usa todo el script para descargar)."
+
+# --- network helpers -------------------------------------------------------
+# The device the route to the internet leaves through right now ("" if none).
+uplink_dev() {
+  ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n1
+}
+
+# Any HTTP answer counts: the question is DNS plus a route, not the status code.
+have_internet() { curl -s -o /dev/null --max-time 10 "$NET_PROBE_URL"; }
+
+wait_for_internet() {  # $1 = seconds
+  local deadline=$((SECONDS + $1))
+  until have_internet; do
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 5
+  done
+}
+
+has_nm() { [ "$SKIP_NETWORK" != "1" ] && command -v nmcli >/dev/null 2>&1; }
+
+# Resolve a profile to its UUID, and drive every later nmcli call with that
+# UUID rather than the name. UUIDs are ASCII and stable, so an accented profile
+# name never has to survive a round trip through nmcli.
+#
+# Match order:
+#   1. persistent connection.interface-name — ASCII, and unlike the runtime
+#      DEVICE column it still matches while the port is down, which is the
+#      state the network manual describes as "-- en la columna device".
+#   2. the profile's name, either the configured one or the device name — the
+#      Celeron AIOs name the profile after its device.
+find_con_uuid() {
+  local want_name="$1" want_dev="$2" u val
+  for u in $(nmcli -t -f UUID connection show); do
+    val="$(nmcli -g connection.interface-name con show "$u" 2>/dev/null || true)"
+    [ "$val" = "$want_dev" ] && { printf '%s' "$u"; return 0; }
+  done
+  for u in $(nmcli -t -f UUID connection show); do
+    val="$(nmcli -g connection.id con show "$u" 2>/dev/null || true)"
+    { [ "$val" = "$want_name" ] || [ "$val" = "$want_dev" ]; } && { printf '%s' "$u"; return 0; }
+  done
+  printf ''
+}
+
+# UUID of the profile active on a device ("" if none).
+active_con_on() {
+  nmcli -t -f UUID,DEVICE connection show --active 2>/dev/null \
+    | awk -F: -v d="$1" '$2 == d { print $1; exit }'
+}
+
+# Device a profile is active on ("" if inactive).
+con_dev() { nmcli -g GENERAL.DEVICES connection show "$1" 2>/dev/null | head -n1 || true; }
+
+# Apply a modified profile. `device reapply` changes a live link in place, so
+# the port the script is downloading through keeps its lease; `con up` (which
+# drops and renegotiates the link) is only the fallback.
+apply_con() {
+  local dev; dev="$(con_dev "$1")"
+  if [ -n "$dev" ] && nmcli device reapply "$dev" >/dev/null 2>&1; then return 0; fi
+  nmcli --wait 45 connection up "$1" >/dev/null
+}
+
+# The lock-controller port, alone on its segment: static, and never a route out.
+lan_static() {
+  nmcli con mod "$1" connection.interface-name "$LAN_CON" connection.autoconnect yes \
+    ipv4.route-metric 300 ipv6.route-metric 300 \
+    ipv4.method manual ipv4.addresses "$LAN_IP" \
+    ipv4.gateway "" ipv4.dns "" ipv4.never-default yes
+}
+
+# The lock-controller port when the internet arrives on it too: DHCP stays, and
+# the static address rides on top. dhcp-timeout 2147483647 is NetworkManager's
+# "never time out": without it, a locker moved to a port with no DHCP server
+# would fail the whole profile after 45 s and take the static address with it.
+lan_shared() {
+  nmcli con mod "$1" connection.interface-name "$LAN_CON" connection.autoconnect yes \
+    ipv4.route-metric 300 ipv6.route-metric 300 \
+    ipv4.method auto ipv4.addresses "$LAN_IP" \
+    ipv4.gateway "" ipv4.dns "" ipv4.never-default no \
+    ipv4.may-fail yes ipv4.dhcp-timeout 2147483647
+}
+
+# Internet is needed by nearly every step, so check it before changing anything.
+# A machine an earlier run left with its only internet port configured as the
+# static lock-controller LAN has no route out; give that port DHCP back first.
+log "0) Conexión a internet"
+if ! wait_for_internet "$NET_WAIT"; then
+  lan_uuid=""
+  has_nm && lan_uuid="$(find_con_uuid "$LAN_CON" "$LAN_CON")"
+  if [ -n "$lan_uuid" ] && [ "$(nmcli -g ipv4.method con show "$lan_uuid")" = manual ]; then
+    info "sin internet; se prueba DHCP en ${LAN_CON} sin quitarle ${LAN_IP}."
+    lan_shared "$lan_uuid"
+    apply_con "$lan_uuid" || true
+    if ! wait_for_internet 60; then
+      lan_static "$lan_uuid"
+      apply_con "$lan_uuid" || true
+    fi
+  fi
+  have_internet || die "sin internet (no responde ${NET_PROBE_URL}). No se cambió nada. Conectá el cable de internet (adaptador USB o ${LAN_CON}) o el Wi-Fi, y volvé a ejecutar el script."
+fi
+info "internet OK (sale por $(uplink_dev))."
 
 echo "Instalador STD — canal '${CANAL}', locker '${LOCKER_NAME}'. Inicio: $(date -Is)"
 [ "$CANAL" = "latest" ] && warn "canal 'latest': build sin pinear, solo para lockers de prueba."
@@ -141,11 +255,17 @@ dnf install -y git tar compat-openssl11 libicu krb5-libs zlib \
 #     cableada 1" on the older bench machines and "enp0s20u1" on the Celeron
 #     AIOs. Keying off one name skips the whole block on the other machine, and
 #     the metric line is what keeps the default route off the lock-controller
-#     segment. See find_con_uuid below for how the profile is located instead.
+#     segment. See find_con_uuid above for how the profile is located instead.
 #   * connection.autoconnect, which is set explicitly here because `con up`
 #     activates for the current boot only. Without it the LAN comes back down
 #     after the reboot at the end of this script — the install verifies clean and
 #     the locker still cannot reach the controller.
+#
+# And one that is loud: turning the lock-controller port static when the
+# internet is arriving on it leaves the machine with no route out, and the next
+# download fails. So the LAN is configured by where the internet is right now
+# (lan_shared vs lan_static), and a WAN candidate that is really the LAN port's
+# profile is never rebound to the USB adapter.
 log "2) Red (WAN preferida, LAN estática hacia la placa de cerraduras)"
 NET_CONFIGURED=0
 LAN_UUID=""
@@ -155,54 +275,63 @@ elif ! command -v nmcli >/dev/null 2>&1; then
   warn "nmcli no está instalado; se omite la configuración de red."
 else
   nmcli -t -f NAME,DEVICE connection show | sed 's/^/    perfil: /'
+  UPLINK="$(uplink_dev)"
+  info "internet entra por: ${UPLINK:-ninguno}"
 
-  # Resolve a profile to its UUID, and drive every later nmcli call with that
-  # UUID rather than the name. UUIDs are ASCII and stable, so an accented profile
-  # name never has to survive a round trip through nmcli.
-  #
-  # Match order:
-  #   1. persistent connection.interface-name — ASCII, and unlike the runtime
-  #      DEVICE column it still matches while the port is down, which is the
-  #      state the network manual describes as "-- en la columna device".
-  #   2. the profile's name, either the configured one or the device name — the
-  #      Celeron AIOs name the profile after its device.
-  find_con_uuid() {
-    local want_name="$1" want_dev="$2" u val
-    for u in $(nmcli -t -f UUID connection show); do
-      val="$(nmcli -g connection.interface-name con show "$u" 2>/dev/null || true)"
-      [ "$val" = "$want_dev" ] && { printf '%s' "$u"; return 0; }
-    done
-    for u in $(nmcli -t -f UUID connection show); do
-      val="$(nmcli -g connection.id con show "$u" 2>/dev/null || true)"
-      { [ "$val" = "$want_name" ] || [ "$val" = "$want_dev" ]; } && { printf '%s' "$u"; return 0; }
-    done
-    printf ''
-  }
-
-  WAN_UUID="$(find_con_uuid "$WAN_CON" "$WAN_IFACE")"
   LAN_UUID="$(find_con_uuid "$LAN_CON" "$LAN_CON")"
+  [ -n "$LAN_UUID" ] || LAN_UUID="$(active_con_on "$LAN_CON")"
+  if [ -z "$LAN_UUID" ] && [ -e "/sys/class/net/${LAN_CON}" ]; then
+    nmcli con add type ethernet ifname "$LAN_CON" con-name "$LAN_CON" >/dev/null
+    LAN_UUID="$(find_con_uuid "$LAN_CON" "$LAN_CON")"
+    info "${LAN_CON} no tenía perfil; se creó uno."
+  fi
+
+  # WAN: the configured adapter if it is here, else whatever the internet
+  # arrives on when that is not the LAN port (another adapter, Wi-Fi).
+  WAN_UUID="$(find_con_uuid "$WAN_CON" "$WAN_IFACE")"
+  if [ -n "$WAN_UUID" ] && { [ "$WAN_UUID" = "$LAN_UUID" ] \
+       || [ "$(nmcli -g connection.interface-name con show "$WAN_UUID")" = "$LAN_CON" ] \
+       || [ "$(con_dev "$WAN_UUID")" = "$LAN_CON" ]; }; then
+    WAN_UUID=""
+  fi
+  if [ -z "$WAN_UUID" ] && [ -n "$UPLINK" ] && [ "$UPLINK" != "$LAN_CON" ]; then
+    WAN_UUID="$(active_con_on "$UPLINK")"
+  fi
 
   if [ -n "$WAN_UUID" ]; then
     info "perfil WAN: '$(nmcli -g connection.id con show "$WAN_UUID")'"
-    nmcli con mod "$WAN_UUID" connection.interface-name "$WAN_IFACE"
-    nmcli con mod "$WAN_UUID" connection.autoconnect yes
-    nmcli con mod "$WAN_UUID" ipv4.route-metric 100 ipv6.route-metric 100
-    nmcli con up  "$WAN_UUID" || warn "no se pudo levantar la WAN."
+    # Bind a name-matched profile to the adapter, so after the reboot it cannot
+    # come up on the LAN port instead. Only when the adapter is here and the
+    # profile is not live on some other device: binding it to an absent device
+    # would just switch it off.
+    wan_dev="$(con_dev "$WAN_UUID")"
+    if [ -e "/sys/class/net/${WAN_IFACE}" ] \
+       && { [ -z "$wan_dev" ] || [ "$wan_dev" = "$WAN_IFACE" ]; } \
+       && [ "$(nmcli -g connection.interface-name con show "$WAN_UUID")" != "$WAN_IFACE" ]; then
+      nmcli con mod "$WAN_UUID" connection.interface-name "$WAN_IFACE"
+    fi
+    nmcli con mod "$WAN_UUID" connection.autoconnect yes \
+      ipv4.route-metric 100 ipv6.route-metric 100
+    apply_con "$WAN_UUID" || warn "no se pudo levantar la WAN (¿sin cable?). Queda configurada para el próximo arranque."
   else
-    warn "no se encontró perfil WAN (ni por dispositivo '$WAN_IFACE' ni por nombre '$WAN_CON'). Ajustá WAN_IFACE=/WAN_CON= y volvé a correr el script."
+    info "sin puerto WAN aparte: internet entra por ${UPLINK:-ningún lado}."
   fi
 
   if [ -n "$LAN_UUID" ]; then
     info "perfil LAN: '$(nmcli -g connection.id con show "$LAN_UUID")'"
-    nmcli con mod "$LAN_UUID" connection.interface-name "$LAN_CON"
-    nmcli con mod "$LAN_UUID" connection.autoconnect yes
-    nmcli con mod "$LAN_UUID" ipv4.route-metric 300 ipv6.route-metric 300
-    nmcli con mod "$LAN_UUID" ipv4.method manual ipv4.addresses "$LAN_IP" \
-                              ipv4.gateway "" ipv4.dns "" ipv4.never-default yes
-    nmcli connection reload
-    nmcli con down "$LAN_UUID" || true
-    nmcli con up   "$LAN_UUID" || warn "no se pudo levantar la LAN."
+    if [ "$UPLINK" = "$LAN_CON" ]; then
+      info "internet entra por ${LAN_CON}: se conserva su DHCP y se le suma ${LAN_IP}."
+      lan_shared "$LAN_UUID"
+    else
+      lan_static "$LAN_UUID"
+    fi
+    apply_con "$LAN_UUID" || warn "no se pudo levantar la LAN (¿sin cable?). Queda configurada para el próximo arranque."
 
+    # reapply returns before the address is on the port; give it a moment.
+    for _ in $(seq 1 15); do
+      ip -4 addr show | grep -q "${LAN_IP%%/*}" && break
+      sleep 1
+    done
     if ip -4 addr show | grep -q "${LAN_IP%%/*}"; then
       info "LAN en ${LAN_IP} — OK."
     else
@@ -210,8 +339,11 @@ else
     fi
     NET_CONFIGURED=1
   else
-    warn "no se encontró perfil LAN (ni por dispositivo ni por nombre '$LAN_CON'). Ajustá LAN_CON= y volvé a correr el script."
+    warn "no existe el puerto ${LAN_CON}: el locker no va a poder abrir cajas. Pasá LAN_CON=<puerto de la placa de cerraduras> y volvé a ejecutar el script."
   fi
+
+  wait_for_internet 60 \
+    || die "la configuración de red dejó al equipo sin internet (antes salía por ${UPLINK:-?}). Volvé a ejecutar el script: el paso 0 lo recupera."
 fi
 
 # --- 3) .NET ---------------------------------------------------------------
